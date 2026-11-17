@@ -352,21 +352,24 @@ data_awal = {
     "C4 - Perilaku": [1.00, 1.00, 0.75, 0.75, 1.00, 0.75],
 }
 
-kriteria = {
+kriteria_awal = {
     "C1 - Disiplin": {"bobot": 0.5, "jenis": "Benefit"},
     "C2 - Kualitas Pekerjaan": {"bobot": 1.0, "jenis": "Benefit"},
     "C3 - Kerja Sama": {"bobot": 0.5, "jenis": "Benefit"},
     "C4 - Perilaku": {"bobot": 1.0, "jenis": "Benefit"},
 }
-kolom_kriteria = list(kriteria.keys())
 
-# Session state menjaga perubahan selama sesi aplikasi berlangsung.
 if "data_karyawan" not in st.session_state:
     st.session_state["data_karyawan"] = pd.DataFrame(data_awal)
+if "kriteria" not in st.session_state:
+    st.session_state["kriteria"] = kriteria_awal.copy()
 
+# Kriteria diambil dari session state agar penambahan/perubahan kriteria
+# langsung digunakan pada matriks keputusan dan perhitungan SAW.
+kriteria = st.session_state["kriteria"]
+kolom_kriteria = list(kriteria.keys())
 df = st.session_state["data_karyawan"].copy()
 bobot = [kriteria[k]["bobot"] for k in kolom_kriteria]
-
 
 # ==================================================
 # 4. PERHITUNGAN SAW
@@ -483,14 +486,14 @@ with st.sidebar:
     st.divider()
 
     st.markdown(
-        """
+        f"""
         <div style="font-size:12px; line-height:2.2;">
             <b>METODE</b><br>
             Simple Additive Weighting<br><br>
             <b>JUMLAH ALTERNATIF</b><br>
             {len(df)} karyawan<br><br>
             <b>JUMLAH KRITERIA</b><br>
-            4 kriteria
+            {len(kriteria)} kriteria
         </div>
         """,
         unsafe_allow_html=True
@@ -721,12 +724,12 @@ elif halaman == "Kriteria dan Bobot":
     judul_halaman(
         "KONFIGURASI PENILAIAN",
         "Kriteria dan Bobot",
-        "Kriteria yang digunakan untuk menilai setiap alternatif karyawan."
+        "Kelola kriteria penilaian. Perubahan kriteria akan diterapkan pada matriks dan perhitungan SAW."
     )
 
     data_kriteria = pd.DataFrame([
         {
-            "Kode": nama.split(" - ")[0],
+            "Kode": nama.split(" - ", 1)[0],
             "Nama Kriteria": nama.split(" - ", 1)[1],
             "Bobot": detail["bobot"],
             "Jenis": detail["jenis"]
@@ -735,16 +738,129 @@ elif halaman == "Kriteria dan Bobot":
     ])
 
     c1, c2 = st.columns(2)
-
     c1.metric("Jumlah Kriteria", len(kriteria))
     c2.metric("Total Bobot", f"{sum(bobot):.2f}")
-
     tabel(data_kriteria, {"Bobot": "{:.2f}"})
 
+    st.divider()
+    st.markdown("**Tambah kriteria baru**")
+    with st.form("form_tambah_kriteria", clear_on_submit=True):
+        nama_kriteria_baru = st.text_input(
+            "Nama kriteria", placeholder="Contoh: Tanggung Jawab"
+        )
+        col_bobot, col_jenis = st.columns(2)
+        with col_bobot:
+            bobot_baru = st.number_input(
+                "Bobot", min_value=0.01, max_value=100.0,
+                value=0.75, step=0.05, format="%.2f"
+            )
+        with col_jenis:
+            jenis_baru = st.selectbox("Jenis kriteria", ["Benefit", "Cost"])
+        tambah_kriteria = st.form_submit_button("Tambah Kriteria", type="primary")
+
+        if tambah_kriteria:
+            nama_bersih = nama_kriteria_baru.strip()
+            nama_tersimpan = [
+                item.split(" - ", 1)[1].casefold() for item in kriteria
+            ]
+            if not nama_bersih:
+                st.error("Nama kriteria harus diisi.")
+            elif nama_bersih.casefold() in nama_tersimpan:
+                st.error("Nama kriteria tersebut sudah tersedia.")
+            else:
+                nomor = 1
+                kode_terpakai = {item.split(" - ", 1)[0] for item in kriteria}
+                while f"C{nomor}" in kode_terpakai:
+                    nomor += 1
+                kolom_baru = f"C{nomor} - {nama_bersih}"
+                st.session_state["kriteria"][kolom_baru] = {
+                    "bobot": float(bobot_baru), "jenis": jenis_baru
+                }
+                data_updated = st.session_state["data_karyawan"].copy()
+                data_updated[kolom_baru] = 0.0
+                st.session_state["data_karyawan"] = data_updated
+                st.session_state.pop("editor_matriks", None)
+                st.success(
+                    f"Kriteria {kolom_baru} berhasil ditambahkan. "
+                    "Silakan isi nilainya pada halaman Matriks Keputusan."
+                )
+                st.rerun()
+
+    st.divider()
+    st.markdown("**Ubah atau hapus kriteria**")
+    if kriteria:
+        kriteria_dipilih = st.selectbox(
+            "Pilih kriteria", list(kriteria.keys()), key="pilih_kriteria_edit"
+        )
+        detail_pilih = kriteria[kriteria_dipilih]
+        kode_pilih, nama_pilih = kriteria_dipilih.split(" - ", 1)
+
+        with st.form("form_edit_kriteria"):
+            nama_edit = st.text_input("Nama kriteria", value=nama_pilih)
+            col_edit_bobot, col_edit_jenis = st.columns(2)
+            with col_edit_bobot:
+                bobot_edit = st.number_input(
+                    "Bobot", min_value=0.01, max_value=100.0,
+                    value=float(detail_pilih["bobot"]), step=0.05,
+                    format="%.2f"
+                )
+            with col_edit_jenis:
+                jenis_edit = st.selectbox(
+                    "Jenis kriteria", ["Benefit", "Cost"],
+                    index=0 if detail_pilih["jenis"] == "Benefit" else 1
+                )
+            simpan_kriteria = st.form_submit_button("Simpan Perubahan", type="primary")
+
+            if simpan_kriteria:
+                nama_edit = nama_edit.strip()
+                nama_lain = [
+                    item.split(" - ", 1)[1].casefold()
+                    for item in kriteria if item != kriteria_dipilih
+                ]
+                if not nama_edit:
+                    st.error("Nama kriteria tidak boleh kosong.")
+                elif nama_edit.casefold() in nama_lain:
+                    st.error("Nama kriteria sudah digunakan.")
+                else:
+                    nama_kolom_baru = f"{kode_pilih} - {nama_edit}"
+                    kriteria_updated = {}
+                    for nama_lama, detail_lama in st.session_state["kriteria"].items():
+                        if nama_lama == kriteria_dipilih:
+                            kriteria_updated[nama_kolom_baru] = {
+                                "bobot": float(bobot_edit), "jenis": jenis_edit
+                            }
+                        else:
+                            kriteria_updated[nama_lama] = detail_lama
+                    st.session_state["kriteria"] = kriteria_updated
+
+                    data_updated = st.session_state["data_karyawan"].copy()
+                    if nama_kolom_baru != kriteria_dipilih:
+                        data_updated = data_updated.rename(
+                            columns={kriteria_dipilih: nama_kolom_baru}
+                        )
+                    st.session_state["data_karyawan"] = data_updated
+                    st.session_state.pop("editor_matriks", None)
+                    st.success("Kriteria berhasil diperbarui.")
+                    st.rerun()
+
+        if st.button("Hapus Kriteria", type="secondary"):
+            if len(kriteria) <= 1:
+                st.warning("Minimal harus ada satu kriteria.")
+            else:
+                st.session_state["kriteria"].pop(kriteria_dipilih)
+                data_updated = st.session_state["data_karyawan"].drop(
+                    columns=[kriteria_dipilih]
+                )
+                st.session_state["data_karyawan"] = data_updated
+                st.session_state.pop("editor_matriks", None)
+                st.success(f"Kriteria {kode_pilih} berhasil dihapus.")
+                st.rerun()
+
     st.info(
-        "Benefit berarti semakin tinggi nilai kriteria, "
-        "semakin baik alternatif. Seluruh kriteria pada "
-        "data ini bertipe benefit."
+        "Benefit berarti semakin tinggi nilai semakin baik, sedangkan Cost "
+        "berarti semakin rendah nilai semakin baik. Setiap kriteria baru "
+        "akan otomatis menjadi kolom pada Matriks Keputusan dan ikut dihitung "
+        "dalam metode SAW. Rentang nilai penilaian adalah 0 sampai 1."
     )
 
 
@@ -754,33 +870,26 @@ elif halaman == "Kriteria dan Bobot":
 elif halaman == "Matriks Keputusan":
     judul_halaman(
         "TAHAP 01", "Matriks Keputusan",
-        "Masukkan atau ubah nilai penilaian setiap karyawan berdasarkan empat kriteria."
+        "Masukkan atau ubah nilai penilaian setiap karyawan berdasarkan seluruh kriteria yang tersedia."
     )
     st.caption(
-        "Rentang nilai mengikuti data penelitian, yaitu 0 sampai 1. "
-        "Gunakan kelipatan 0,25 (contoh: 0,75 atau 1,00)."
+        "Rentang nilai penilaian adalah 0 sampai 1. "
+        "Gunakan kelipatan 0,25 jika mengikuti skala pada data penelitian awal."
     )
 
+    konfigurasi_kolom = {
+        kolom: st.column_config.NumberColumn(
+            kolom, min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
+        )
+        for kolom in kolom_kriteria
+    }
     editor = st.data_editor(
         df,
         hide_index=True,
         use_container_width=True,
         key="editor_matriks",
         disabled=["Alternatif", "Nama Karyawan"],
-        column_config={
-            "C1 - Disiplin": st.column_config.NumberColumn(
-                "C1 - Disiplin", min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
-            ),
-            "C2 - Kualitas Pekerjaan": st.column_config.NumberColumn(
-                "C2 - Kualitas Pekerjaan", min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
-            ),
-            "C3 - Kerja Sama": st.column_config.NumberColumn(
-                "C3 - Kerja Sama", min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
-            ),
-            "C4 - Perilaku": st.column_config.NumberColumn(
-                "C4 - Perilaku", min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
-            ),
-        }
+        column_config=konfigurasi_kolom
     )
 
     if st.button("Simpan Nilai Matriks", type="primary"):
@@ -796,7 +905,10 @@ elif halaman == "Matriks Keputusan":
         except Exception as error:
             st.error(f"Data belum dapat disimpan: {error}")
 
-    st.caption("X = matriks keputusan awal. Perubahan baru berlaku setelah tombol Simpan Nilai Matriks ditekan.")
+    st.caption(
+        "X = matriks keputusan awal. Perubahan baru berlaku setelah tombol "
+        "Simpan Nilai Matriks ditekan."
+    )
 
 
 # ==================================================
@@ -831,8 +943,9 @@ elif halaman == "Perhitungan SAW":
     )
 
     st.info(
-        "Nilai maksimum seluruh kriteria adalah 1, sehingga "
-        "matriks normalisasi sama dengan matriks keputusan."
+        "Normalisasi dihitung untuk setiap kriteria sesuai jenisnya "
+        "(benefit atau cost). Hasilnya dapat berubah ketika nilai matriks "
+        "atau konfigurasi kriteria diperbarui."
     )
 
     st.divider()
