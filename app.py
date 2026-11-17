@@ -340,71 +340,59 @@ st.markdown("""
 
 
 # ==================================================
-# 3. DATA PENELITIAN
+# 3. DATA PENELITIAN DAN SESSION STATE
 # ==================================================
-data = {
+data_awal = {
     "Alternatif": ["A1", "A2", "A3", "A4", "A5", "A6"],
-    "Nama Karyawan": [
-        "Dewi Astuti",
-        "M. Rizky Saputra",
-        "Melda Fitria",
-        "Ahmanuddin",
-        "Darwansyah",
-        "Andrian Wahyudi"
-    ],
+    "Nama Karyawan": ["Dewi Astuti", "M. Rizky Saputra", "Melda Fitria",
+                      "Ahmanuddin", "Darwansyah", "Andrian Wahyudi"],
     "C1 - Disiplin": [0.75, 1.00, 0.75, 1.00, 1.00, 1.00],
     "C2 - Kualitas Pekerjaan": [0.75, 0.75, 1.00, 0.75, 1.00, 0.75],
     "C3 - Kerja Sama": [0.75, 0.75, 1.00, 0.75, 0.75, 1.00],
     "C4 - Perilaku": [1.00, 1.00, 0.75, 0.75, 1.00, 0.75],
 }
 
-df = pd.DataFrame(data)
-
 kriteria = {
     "C1 - Disiplin": {"bobot": 0.5, "jenis": "Benefit"},
-    "C2 - Kualitas Pekerjaan": {
-        "bobot": 1.0, "jenis": "Benefit"
-    },
+    "C2 - Kualitas Pekerjaan": {"bobot": 1.0, "jenis": "Benefit"},
     "C3 - Kerja Sama": {"bobot": 0.5, "jenis": "Benefit"},
     "C4 - Perilaku": {"bobot": 1.0, "jenis": "Benefit"},
 }
-
 kolom_kriteria = list(kriteria.keys())
+
+# Session state menjaga perubahan selama sesi aplikasi berlangsung.
+if "data_karyawan" not in st.session_state:
+    st.session_state["data_karyawan"] = pd.DataFrame(data_awal)
+
+df = st.session_state["data_karyawan"].copy()
 bobot = [kriteria[k]["bobot"] for k in kolom_kriteria]
 
 
 # ==================================================
 # 4. PERHITUNGAN SAW
 # ==================================================
-matriks = df[kolom_kriteria].copy()
+matriks = df[kolom_kriteria].astype(float).copy()
 normalisasi = pd.DataFrame(index=matriks.index)
 
 for kolom in kolom_kriteria:
     jenis = kriteria[kolom]["jenis"]
-
     if jenis == "Benefit":
         maksimum = matriks[kolom].max()
-        normalisasi[kolom] = (
-            matriks[kolom] / maksimum if maksimum != 0 else 0
-        )
+        normalisasi[kolom] = matriks[kolom] / maksimum if maksimum != 0 else 0
     else:
         minimum = matriks[kolom].min()
-        normalisasi[kolom] = minimum / matriks[kolom]
+        normalisasi[kolom] = minimum / matriks[kolom].replace(0, float("nan"))
 
+normalisasi = normalisasi.fillna(0)
 df_hasil = df[["Alternatif", "Nama Karyawan"]].copy()
 df_hasil["Nilai SAW"] = normalisasi.mul(bobot, axis=1).sum(axis=1)
-
-df_hasil["Peringkat"] = (
-    df_hasil["Nilai SAW"]
-    .rank(method="dense", ascending=False)
-    .astype(int)
-)
-
+df_hasil["Peringkat"] = df_hasil["Nilai SAW"].rank(
+    method="dense", ascending=False
+).astype(int)
 df_hasil = df_hasil.sort_values(
     ["Peringkat", "Nama Karyawan"]
 ).reset_index(drop=True)
-
-terbaik = df_hasil.iloc[0]
+terbaik = df_hasil.iloc[0] if not df_hasil.empty else None
 
 
 # ==================================================
@@ -500,7 +488,7 @@ with st.sidebar:
             <b>METODE</b><br>
             Simple Additive Weighting<br><br>
             <b>JUMLAH ALTERNATIF</b><br>
-            6 karyawan<br><br>
+            {len(df)} karyawan<br><br>
             <b>JUMLAH KRITERIA</b><br>
             4 kriteria
         </div>
@@ -632,17 +620,97 @@ if halaman == "Beranda":
 # ==================================================
 elif halaman == "Data Alternatif":
     judul_halaman(
-        "DATA MASTER",
-        "Data Alternatif Karyawan",
-        "Daftar karyawan yang menjadi alternatif dalam proses pengambilan keputusan."
+        "DATA MASTER", "Data Alternatif Karyawan",
+        "Tambahkan karyawan baru atau ubah dan hapus data alternatif yang sudah ada."
     )
-
     st.metric("Jumlah Alternatif", len(df))
 
+    with st.expander("Tambah Karyawan Baru", expanded=False):
+        with st.form("form_tambah_karyawan", clear_on_submit=True):
+            nama_baru = st.text_input("Nama Karyawan", placeholder="Masukkan nama karyawan")
+            st.caption("Kode alternatif dibuat otomatis oleh sistem.")
+            tambah = st.form_submit_button("Tambah Karyawan", type="primary")
+            if tambah:
+                nama_baru = nama_baru.strip()
+                if not nama_baru:
+                    st.error("Nama karyawan harus diisi.")
+                elif nama_baru.casefold() in df["Nama Karyawan"].str.casefold().values:
+                    st.error("Nama karyawan tersebut sudah terdaftar.")
+                else:
+                    nomor = 1
+                    kode_terpakai = set(df["Alternatif"].astype(str))
+                    while f"A{nomor}" in kode_terpakai:
+                        nomor += 1
+                    baris_baru = {
+                        "Alternatif": f"A{nomor}",
+                        "Nama Karyawan": nama_baru,
+                        **{kolom: 0.0 for kolom in kolom_kriteria}
+                    }
+                    st.session_state["data_karyawan"] = pd.concat(
+                        [df, pd.DataFrame([baris_baru])], ignore_index=True
+                    )
+                    st.session_state.pop("editor_matriks", None)
+                    st.success(
+                        f"{nama_baru} berhasil ditambahkan sebagai A{nomor}. "
+                        "Isi nilai kriterianya pada halaman Matriks Keputusan."
+                    )
+                    st.rerun()
+
+    st.markdown("**Daftar karyawan**")
     tabel(df[["Alternatif", "Nama Karyawan"]])
 
-    st.caption(
-        "Data alternatif mengikuti penelitian yang dijadikan referensi."
+    if not df.empty:
+        with st.expander("Ubah atau Hapus Karyawan"):
+            kode_pilih = st.selectbox(
+                "Pilih karyawan", df["Alternatif"].tolist(),
+                format_func=lambda kode: (
+                    f"{kode} — " + df.loc[
+                        df["Alternatif"] == kode, "Nama Karyawan"
+                    ].iloc[0]
+                )
+            )
+            nama_edit = st.text_input(
+                "Nama karyawan",
+                value=df.loc[df["Alternatif"] == kode_pilih, "Nama Karyawan"].iloc[0],
+                key="nama_edit"
+            )
+            col_edit, col_hapus = st.columns(2)
+            with col_edit:
+                if st.button("Simpan Perubahan Nama", type="primary"):
+                    nama_edit = nama_edit.strip()
+                    nama_lain = [
+                        n.casefold() for n in df.loc[
+                            df["Alternatif"] != kode_pilih, "Nama Karyawan"
+                        ].tolist()
+                    ]
+                    if not nama_edit:
+                        st.error("Nama karyawan tidak boleh kosong.")
+                    elif nama_edit.casefold() in nama_lain:
+                        st.error("Nama tersebut sudah digunakan karyawan lain.")
+                    else:
+                        updated = df.copy()
+                        updated.loc[
+                            updated["Alternatif"] == kode_pilih, "Nama Karyawan"
+                        ] = nama_edit
+                        st.session_state["data_karyawan"] = updated
+                        st.session_state.pop("editor_matriks", None)
+                        st.success("Nama karyawan berhasil diperbarui.")
+                        st.rerun()
+            with col_hapus:
+                if st.button("Hapus Karyawan"):
+                    if len(df) <= 1:
+                        st.warning("Minimal harus ada satu alternatif.")
+                    else:
+                        st.session_state["data_karyawan"] = df[
+                            df["Alternatif"] != kode_pilih
+                        ].reset_index(drop=True)
+                        st.session_state.pop("editor_matriks", None)
+                        st.success("Data karyawan berhasil dihapus.")
+                        st.rerun()
+
+    st.info(
+        "Setelah menambahkan karyawan, buka halaman Matriks Keputusan untuk "
+        "mengisi nilai disiplin, kualitas pekerjaan, kerja sama, dan perilaku."
     )
 
 
@@ -685,22 +753,50 @@ elif halaman == "Kriteria dan Bobot":
 # ==================================================
 elif halaman == "Matriks Keputusan":
     judul_halaman(
-        "TAHAP 01",
-        "Matriks Keputusan",
-        "Nilai awal setiap karyawan berdasarkan empat kriteria penilaian."
+        "TAHAP 01", "Matriks Keputusan",
+        "Masukkan atau ubah nilai penilaian setiap karyawan berdasarkan empat kriteria."
+    )
+    st.caption(
+        "Rentang nilai mengikuti data penelitian, yaitu 0 sampai 1. "
+        "Gunakan kelipatan 0,25 (contoh: 0,75 atau 1,00)."
     )
 
-    tabel(
+    editor = st.data_editor(
         df,
-        {
-            "C1 - Disiplin": "{:.2f}",
-            "C2 - Kualitas Pekerjaan": "{:.2f}",
-            "C3 - Kerja Sama": "{:.2f}",
-            "C4 - Perilaku": "{:.2f}",
+        hide_index=True,
+        use_container_width=True,
+        key="editor_matriks",
+        disabled=["Alternatif", "Nama Karyawan"],
+        column_config={
+            "C1 - Disiplin": st.column_config.NumberColumn(
+                "C1 - Disiplin", min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
+            ),
+            "C2 - Kualitas Pekerjaan": st.column_config.NumberColumn(
+                "C2 - Kualitas Pekerjaan", min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
+            ),
+            "C3 - Kerja Sama": st.column_config.NumberColumn(
+                "C3 - Kerja Sama", min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
+            ),
+            "C4 - Perilaku": st.column_config.NumberColumn(
+                "C4 - Perilaku", min_value=0.0, max_value=1.0, step=0.25, format="%.2f"
+            ),
         }
     )
 
-    st.caption("X = matriks keputusan awal.")
+    if st.button("Simpan Nilai Matriks", type="primary"):
+        try:
+            nilai_baru = editor.copy()
+            for kolom in kolom_kriteria:
+                nilai_baru[kolom] = pd.to_numeric(nilai_baru[kolom], errors="raise")
+                if nilai_baru[kolom].isna().any() or not nilai_baru[kolom].between(0, 1).all():
+                    raise ValueError(f"Nilai pada {kolom} harus berada di antara 0 dan 1.")
+            st.session_state["data_karyawan"] = nilai_baru.reset_index(drop=True)
+            st.success("Nilai matriks berhasil disimpan. Perhitungan SAW diperbarui.")
+            st.rerun()
+        except Exception as error:
+            st.error(f"Data belum dapat disimpan: {error}")
+
+    st.caption("X = matriks keputusan awal. Perubahan baru berlaku setelah tombol Simpan Nilai Matriks ditekan.")
 
 
 # ==================================================
